@@ -6,5 +6,9 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+axum = {version = "0.6.12", features = ["ws"]}
+futures = "0.3.28"
 parser ={ path = "../parser"}
 parser_macros ={ path = "../parser/parser_macros"}
+serde = "1.0.159"
+tokio = { version = "1.27.0", features = ["macros", "rt-multi-thread"] }
