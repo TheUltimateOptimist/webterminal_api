@@ -40,43 +40,28 @@ async fn get_decoding_key(kid: &String) -> Option<DecodingKey> {
 }
 
 async fn authorise(token: &str, project_id: &str) -> Result<Claims, Response> {
-    let unauthorised = StatusCode::UNAUTHORIZED.into_response();
+    fn unauthorised() -> Response {
+        StatusCode::UNAUTHORIZED.into_response()
+    }
     let algorithm = Algorithm::RS256;
     let validation = Validation::new(algorithm);
-    match decode_header(token) {
-        Ok(header) => {
-            if header.alg != algorithm {
-                return Err(unauthorised);
-            }
-            match header.kid {
-                Some(kid) => {
-                    let decoding_key = get_decoding_key(&kid).await;
-                    match decoding_key {
-                        Some(decoding_key) => match decode::<Claims>(token, &decoding_key, &validation) {
-                            Ok(decoded_token) => {
-                                let issuer = format!("https://securetoken.google.com/{}", project_id);
-                                let claims = decoded_token.claims;
-                                let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
-                                let secs = now.as_secs() as usize;
-                                //expiration date must be in the future, issued-at-time must be in the past,
-                                //authentication-time must be in the past, aud must be equal to project_id, issuer must be 
-                                //"https://securetoken.google.com/<projectId>", subject must be a non empty string(user id)
-                                if claims.exp <= secs || claims.iat >= secs || claims.auth_time >= secs || project_id != claims.aud || claims.iss != issuer || claims.sub.is_empty() {
-                                    return Err(unauthorised);
-                                }
-                                return Ok(claims);
-    
-                            },
-                            Err(_) => return Err(unauthorised),
-                        },
-                        None => return Err(unauthorised),
-                    }
-                },
-                None => return Err(unauthorised),
-            }
-        },
-        Err(_) => return Err(unauthorised),
+    let header = decode_header(token).map_err(|_| unauthorised())?;
+    if header.alg != algorithm {
+        return Err(unauthorised());
     }
+    let decoding_key = get_decoding_key(&header.kid.ok_or(unauthorised())?).await.ok_or(unauthorised())?;
+    let decoded_token = decode::<Claims>(token, &decoding_key, &validation).map_err(|_| unauthorised())?;
+    let issuer = format!("https://securetoken.google.com/{}", project_id);
+    let claims = decoded_token.claims;
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
+    let secs = now.as_secs() as usize;
+    //expiration date must be in the future, issued-at-time must be in the past,
+    //authentication-time must be in the past, aud must be equal to project_id, issuer must be 
+    //"https://securetoken.google.com/<projectId>", subject must be a non empty string(user id)
+    if claims.exp <= secs || claims.iat >= secs || claims.auth_time >= secs || project_id != claims.aud || claims.iss != issuer || claims.sub.is_empty() {
+        return Err(unauthorised());
+    }
+    Ok(claims)
 }
 
 async fn ws_handler(socket_up: WebSocketUpgrade, Path(token): Path<String>) -> Result<Response, Response> {
