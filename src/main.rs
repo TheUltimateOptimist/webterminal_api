@@ -1,22 +1,31 @@
-use parser::*;
+use axum::{Extension, debug_handler};
+use parser::{self, ParseError, Command, CommandNode, DataType, Optional, Output, Parameter, PomodoroTimer, TreeNode, parse_with_tree};
 use parser_macros::{command, register, command_n};
-use axum::extract::Path;
-use axum::{extract::ws::{WebSocket, WebSocketUpgrade, Message}, Router, routing::get, response::{Response, IntoResponse}, http::StatusCode};
+use axum::extract::{Path, State};
+use axum::{extract::ws::{WebSocket, WebSocketUpgrade, Message}, Router, routing::{get, post}, response::{Response, IntoResponse}, http::StatusCode};
 use serde::{Serialize, Deserialize};
 use std::net::SocketAddr;
 use jsonwebtoken::{decode, DecodingKey, Algorithm, Validation, decode_header};
 use reqwest;
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
+use sqlx::{PgPool, Pool, Postgres};
+use std::future::Future;
+use std::pin::Pin;
 
 #[tokio::main]
-async fn main() {
-    let app = Router::new().route("/terminal/:token", get(ws_handler));
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let addr = SocketAddr::from(([0, 0, 0, 0], 3000));
+    let pool = PgPool::connect("postgres://postgres:!566071!Tusik1978@localhost/worktracker").await.expect("creating connection pool failed");
+    let app = Router::new().
+        route("/terminal/:token", get(ws_handler)).
+        route("/worktracker/sessions/add/:topic_id/:start/:end", post(add_session)).
+        with_state(pool);
     axum::Server::bind(&addr)
         .serve(app.into_make_service())
-        .await
-        .unwrap();
+        .await.unwrap();
+    Ok(())
+    
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -27,6 +36,24 @@ struct Claims {
     iss: String,      
     sub: String,
     auth_time: usize,
+}
+
+#[derive(sqlx::FromRow)]
+struct Session {
+    id: i32,
+    start: f64,
+    end: f64,
+    topic_id: i32,
+}
+
+async fn add_session(Path((topic_id, start, end)): Path<(i32, f64, f64)> , State(pool): State<Pool<Postgres>>) {
+    println!("received it");
+    sqlx::query!("INSERT INTO sessions(topic_id, start, \"end\") VALUES ($1, $2, $3)", topic_id, start, end).execute(&pool).await.unwrap();
+}
+
+struct InsertableTopic {
+    name: String,
+    parent: i32,
 }
 
 async fn get_decoding_key(kid: &String) -> Option<DecodingKey> {
@@ -64,7 +91,8 @@ async fn authorise(token: &str, project_id: &str) -> Result<Claims, Response> {
     Ok(claims)
 }
 
-async fn ws_handler(socket_up: WebSocketUpgrade, Path(token): Path<String>) -> Result<Response, Response> {
+
+async fn ws_handler(socket_up: WebSocketUpgrade, Path(token): Path<String>, State(pool): State<Pool<Postgres>>) -> Result<Response, Response> {
     let claims = authorise(&token, "personal-743af").await?;
     println!("{:?}", claims);
     Ok(socket_up.on_upgrade(ws))
@@ -79,7 +107,7 @@ async fn ws(mut socket: WebSocket) {
             return;
         };
         let message_text = msg.into_text().unwrap();
-        let outputs = match parse(&message_text) {
+        let outputs = match parse(&message_text).await {
             Ok(value) => value,
             Err(err) => vec![Output::Error(err.to_string())],
 
@@ -90,9 +118,10 @@ async fn ws(mut socket: WebSocket) {
             // client disconnected
             return;
             }
-        }
+        }     
     }
 }
+
 
 register! {
     "logout": logout
@@ -105,6 +134,8 @@ register! {
     "tree": tree
     "pomodoro": pomodoro
 }
+
+
 
 #[command]
 fn logout() -> Output {
@@ -138,7 +169,7 @@ fn tree() -> Output {
 
 #[command]
 fn table() -> Output {
-    return Output::Table(Table{
+    return Output::Table(parser::Table{
         title: "Some Title".to_owned(),
         data: vec![vec!["first".to_owned(), "second".to_owned(), "third".to_owned()], vec!["one".to_owned(), "two".to_owned(), "three".to_owned()], vec!["four".to_owned(), "five".to_owned(), "six".to_owned()]],
     })
