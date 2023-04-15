@@ -35,7 +35,8 @@ pub async fn authorise(token: &str, project_id: &str) -> Result<Claims, Response
     //expiration date must be in the future, issued-at-time must be in the past,
     //authentication-time must be in the past, aud must be equal to project_id, issuer must be 
     //"https://securetoken.google.com/<projectId>", subject must be a non empty string(user id)
-    if claims.exp <= secs || claims.iat >= secs || claims.auth_time >= secs || project_id != claims.aud || claims.iss != issuer || claims.sub.is_empty() {
+    let safety_gap = 1; //add another second as safety gap
+    if claims.exp <= secs || claims.iat >= secs + safety_gap || claims.auth_time >= secs + safety_gap || project_id != claims.aud || claims.iss != issuer || claims.sub.is_empty() {
         return Err(unauthorised());
     }
     Ok(claims)
