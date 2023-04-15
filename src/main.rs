@@ -1,17 +1,12 @@
-use axum::{Extension, debug_handler};
 use parser::{self, Output, TreeNode};
 use parser_macros::{command, register, command_n};
 use axum::extract::{Path, State};
 use axum::{extract::ws::{WebSocket, WebSocketUpgrade, Message}, Router, routing::{get, post}, response::{Response, IntoResponse}, http::StatusCode};
-use serde::{Serialize, Deserialize};
 use std::net::SocketAddr;
-use jsonwebtoken::{decode, DecodingKey, Algorithm, Validation, decode_header};
-use reqwest;
-use std::collections::HashMap;
-use std::time::{SystemTime, UNIX_EPOCH};
 use sqlx::{PgPool, Pool, Postgres};
 use std::future::Future;
 use std::pin::Pin;
+mod authorise;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -28,15 +23,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-struct Claims {
-    exp: usize,                 
-    iat: usize,     
-    aud: String, 
-    iss: String,      
-    sub: String,
-    auth_time: usize,
-}
 
 #[derive(sqlx::FromRow)]
 struct Session {
@@ -56,44 +42,9 @@ struct InsertableTopic {
     parent: i32,
 }
 
-async fn get_decoding_key(kid: &String) -> Option<DecodingKey> {
-    let response = reqwest::get("https://www.googleapis.com/robot/v1/metadata/x509/securetoken@system.gserviceaccount.com").await.unwrap();
-    let keys: HashMap<String, String> = serde_json::from_str(&response.text().await.unwrap()).unwrap();
-    let public_key =  keys.get::<String>(kid);
-    return match public_key {
-        Some(key) => Some(DecodingKey::from_rsa_pem(key.as_bytes()).unwrap()),
-        None => None,
-    }
-}
-
-async fn authorise(token: &str, project_id: &str) -> Result<Claims, Response> {
-    fn unauthorised() -> Response {
-        StatusCode::UNAUTHORIZED.into_response()
-    }
-    let algorithm = Algorithm::RS256;
-    let validation = Validation::new(algorithm);
-    let header = decode_header(token).map_err(|_| unauthorised())?;
-    if header.alg != algorithm {
-        return Err(unauthorised());
-    }
-    let decoding_key = get_decoding_key(&header.kid.ok_or(unauthorised())?).await.ok_or(unauthorised())?;
-    let decoded_token = decode::<Claims>(token, &decoding_key, &validation).map_err(|_| unauthorised())?;
-    let issuer = format!("https://securetoken.google.com/{}", project_id);
-    let claims = decoded_token.claims;
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
-    let secs = now.as_secs() as usize;
-    //expiration date must be in the future, issued-at-time must be in the past,
-    //authentication-time must be in the past, aud must be equal to project_id, issuer must be 
-    //"https://securetoken.google.com/<projectId>", subject must be a non empty string(user id)
-    if claims.exp <= secs || claims.iat >= secs || claims.auth_time >= secs || project_id != claims.aud || claims.iss != issuer || claims.sub.is_empty() {
-        return Err(unauthorised());
-    }
-    Ok(claims)
-}
-
 
 async fn ws_handler(socket_up: WebSocketUpgrade, Path(token): Path<String>, State(pool): State<Pool<Postgres>>) -> Result<Response, Response> {
-    let claims = authorise(&token, "personal-743af").await?;
+    let claims = authorise::authorise(&token, "personal-743af").await?;
     println!("{:?}", claims);
     //ws.on_upgrade(move |socket| handle_socket(socket, addr));
     Ok(socket_up.on_upgrade(|socket| ws(socket, pool)))
