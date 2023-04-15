@@ -74,17 +74,10 @@ async fn ws(mut socket: WebSocket, pool: Pool<Postgres>) {
     }
 }
 
-
 register! {
 ----"logout": logout
+----"track": track
 ----"lofi": lofi
-----"some"
---------"another"
-------------"lol": lol
-----"yeah": yeah
-----"table": table
-----"tree": tree
-----"pomodoro": pomodoro
 }
 
 #[command]
@@ -93,54 +86,15 @@ fn logout(_: parser::State<Pool<Postgres>>) -> Output {
 }
 
 #[command(duration = 1620, pause = 180)]
-fn pomodoro(topic_id: i32, duration: i32, pause: i32, _: parser::State<Pool<Postgres>>) -> Output {
+fn track(topic_id: i32, duration: i32, pause: i32, _: parser::State<Pool<Postgres>>) -> Output {
     return Output::PomodoroTimer(
         parser::PomodoroTimer { duration: duration, pause: pause, topic_id: topic_id, topic_name: "some name".to_owned() }
     )
 }
 
 #[command]
-fn tree(_: parser::State<Pool<Postgres>>) -> Output {
-    return Output::Tree(
-        TreeNode { name: "first".to_owned(), children: Some(vec![
-            TreeNode {
-                name: "first child".to_owned(), children: Some(vec![
-                    TreeNode {
-                        name: "another child".to_owned(), children: None,
-                    }
-                ])
-            },
-            TreeNode{
-                name: "second child".to_owned(), children: None,
-            }
-        ]) }
-    )
-}
-
-#[command]
-fn table(parser::State(pool): parser::State<Pool<Postgres>>) -> Output {
-    return Output::Table(parser::Table{
-        title: "Some Title".to_owned(),
-        data: vec![vec!["first".to_owned(), "second".to_owned(), "third".to_owned()], vec!["one".to_owned(), "two".to_owned(), "three".to_owned()], vec!["four".to_owned(), "five".to_owned(), "six".to_owned()]],
-    })
-}
-
-
-#[command(two = 2, three = "sdfkl")]
-fn lofi(one: String, two: i32, three: String, _: parser::State<Pool<Postgres>>) -> Output {
-    println!("lofi");
-    return Output::Empty;
-}
-
-#[command_n]
-fn yeah(_: parser::State<Pool<Postgres>>) -> Vec<Output> {
-    return vec![Output::Text("one".to_owned()), Output::Text("two".to_owned())];
-}
-
-#[command]
-fn lol(_: parser::State<Pool<Postgres>>) -> Output {
-    println!("lol");
-    return Output::Empty;
+fn lofi(_: parser::State<Pool<Postgres>>) -> Output {
+    return Output::Url("https://www.youtube.com/watch?v=jfKfPfyJRdk".to_owned());
 }
 
 // register! {
