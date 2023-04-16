@@ -1,7 +1,8 @@
 use parser::{self, Output, TreeNode, ToJson};
-use parser_macros::{command, register, command_result};
+use parser_macros::{command, register, command_result, command_n_result};
 use axum::extract::{Path, State};
 use axum::{extract::ws::{WebSocket, WebSocketUpgrade, Message}, Router, routing::{get, post}, response::{Response, IntoResponse}, http::StatusCode};
+use serde::Serialize;
 use std::net::SocketAddr;
 use sqlx::{PgPool, Pool, Postgres, Transaction};
 use std::future::Future;
@@ -29,6 +30,65 @@ struct Session {
     duration: i32,
     topic_id: i32,
 }
+
+#[derive(sqlx::FromRow, Serialize)]
+struct HierarchyEntry {
+    parent: i32,
+    child: i32,
+    name: String,
+}
+
+struct TopicNode {
+    id: i32,
+    name: Option<String>,
+    children: Option<Vec<TopicNode>>,
+}
+
+
+
+impl From<TopicNode> for TreeNode {
+    fn from(value: TopicNode) -> Self {
+        TreeNode {
+            name: match value.name {
+                Some(name) => Some(format!("{}: {}", value.id, name)),
+                None => None,
+            },
+            children: match value.children {
+                Some(children) => Some(children.into_iter().map(|x| x.into()).collect::<Vec<TreeNode>>()),
+                None => None,
+            }
+        }
+    }
+}
+
+impl TopicNode {
+    fn new(child: i32, name: Option<String>) -> TopicNode {
+        Self {
+            id: child,
+            name: name,
+            children: None,
+        }
+    }
+    fn insert(&mut self, entry: HierarchyEntry) {
+        if self.id == entry.parent {
+            if self.children.is_none() {
+                self.children = Some(vec![TopicNode::new(entry.child, Some(entry.name))])
+            }
+            else {
+                self.children.as_mut().unwrap().push(TopicNode::new(entry.child, Some(entry.name)));
+            }
+            return;
+        }
+        for node in self.children.as_mut().unwrap() {
+            if *(&entry.parent) == node.id || *(&entry.parent) > node.id {
+                node.insert(entry);
+                return;
+            }
+        }
+        self.children.as_mut().unwrap().last_mut().unwrap().insert(entry);
+    }
+}
+
 
 async fn ws_handler(socket_up: WebSocketUpgrade, Path(token): Path<String>, State(pool): State<Pool<Postgres>>) -> Result<Response, Response> {
     let claims = authorise::authorise(&token, "personal-743af").await?;
@@ -66,10 +126,10 @@ register! {
 ----"lofi": lofi
 ----"topics"
 --------"add": add_topic
+--------"show": show_topics
 ----"sessions"
 --------"add": add_session
 }
-
 
 #[derive(Debug)]
 struct UnexpectedNone;
@@ -106,6 +166,20 @@ impl<T, E: std::error::Error> ResultMessage<T> for Result<T, E> {
             Err(err) => Err(err.to_string()),
         }
     }
+}
+
+#[command_n_result(parent = 0)]
+fn show_topics(parent: u32, pool: Pool<Postgres>) {
+    let hierarchy = sqlx::query_as!(
+        HierarchyEntry,
+        "select parent, child, name from hierarchy left join topics on hierarchy.child = topics.id where depth = 1 and child in (SELECT DISTINCT child from hierarchy where parent = $1) order by parent, child",
+        parent as i64
+    ).fetch_all(&pool).await?;
+    let mut tree = TopicNode::new(0, None);
+    for hierarchy_entry in hierarchy {
+        tree.insert(hierarchy_entry);
+    }
+    Ok(vec![Output::Text("All topics:".to_owned()), Output::Tree(tree.into())])
 }
 
 #[command_result]
@@ -183,8 +257,4 @@ fn lofi(_: Pool<Postgres>) {
 //             "root": root
 //             "today": today
 //             "yesterday": yesterday
-//     "topics"
-//         "add": add
-//         "show": show
-//     "track": track
 // }
